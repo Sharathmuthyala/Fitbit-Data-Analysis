@@ -1,0 +1,516 @@
+---
+title: "Final project on Readiness Score Report"
+author: "Jatin Adya and Sharath Reddy Muthyala"
+format: 
+  html:
+    embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r}
+rm(list = ls())  
+
+```
+
+# Load necessary libraries
+
+```{r}
+library(readr)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(forecast)
+library(rsample)
+library(lattice)
+library(corrplot) 
+library(randomForest)
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(pdp) 
+library(Matrix)
+library(lubridate)
+library(tidyverse)
+
+```
+
+# Data Import
+
+```{r}
+# Set the path to the directory containing your files
+path <- "/Users/sharath/Desktop/SPRING 2024/STAT 5125/Project/Daily Readiness"
+
+# Create a vector of filenames
+filenames <- list.files(path, pattern = "Daily Readiness Score -.*\\.csv", full.names = TRUE)
+
+# Read and merge all datasets
+data <- filenames %>%
+  lapply(function(file) read_csv(file, show_col_types = FALSE)) %>%
+  bind_rows()
+
+```
+
+# Data Cleaning
+
+```{r}
+# Remove rows with missing values
+data <- na.omit(data)
+
+```
+
+```{r}
+# First few rows of the data
+head(data)
+
+```
+
+## Data Description
+
+-   **Date**: The date of the score.
+-   **Readiness Score Value**: The final daily readiness score.
+-   **Readiness State**: Description of the overall readiness state.
+-   **Activity Subcomponent**: The activity subcomponent.
+-   **Sleep Subcomponent**: The recent sleep subcomponent.
+-   **HRV Subcomponent**: The heart rate variability subcomponent.
+-   **Activity State**: Description of the activity state.
+-   **Sleep State**: Description of the recent sleep state.
+-   **HRV State**: Description of the heart rate variability state.
+
+# Data Exploration
+
+```{r}
+# Histogram plot of the readiness score
+ggplot(data, aes(x = readiness_score_value)) +
+  geom_histogram()
+
+```
+
+The histogram of readiness score values displays a bimodal distribution with peaks around scores of 10 and 90, suggesting that instances of readiness are often at the extremes—either very low or very high. There are fewer moderate scores around the 50 range. This pattern indicates that the conditions measured tend to be distinctly polarized, either indicating very good or very poor readiness.
+
+```{r}
+ggplot(data, aes(x = activity_subcomponent, y = readiness_score_value)) +
+  geom_point()
+
+```
+
+The scatter plot shows the relationship between the activity subcomponent scores and the overall readiness score values. Here are the key observations:
+
+1.  **Positive Linear Relationship**: There is a clear positive linear trend for most of the data points, indicating that higher activity subcomponent scores generally correspond to higher readiness scores. This suggests that increased activity levels might contribute positively to overall readiness.
+
+2.  **Cluster of Outliers**: There is a distinct cluster of outliers at higher activity subcomponent scores (near 100) where the readiness scores are significantly lower than the trend would suggest. This could indicate scenarios where high activity levels do not translate to high readiness, possibly due to overtraining or insufficient recovery.
+
+3.  **Data Clustering**: The data points are densely packed along the diagonal, which strengthens the indication of a strong linear relationship between these two variables.
+
+```{r}
+# Correlation plot of the data
+corrplot(cor(data[, sapply(data, is.numeric)]), type = "upper") 
+
+```
+
+1.  **Strong positive correlations** between readiness scores and both activity and sleep subcomponents, indicating that higher activity levels and better sleep quality are associated with higher readiness scores.
+
+2.  **Moderate correlations** between sleep quality and HRV, as well as between activity and sleep, suggesting interdependencies among these factors.
+
+3.  **Weaker correlation** between activity levels and HRV, implying less direct association between these two metrics.
+
+```{r}
+# Convert 'date' to Date type
+data$date <- ymd(data$date)
+
+# Histograms of scores
+data %>%
+  select(readiness_score_value, activity_subcomponent, sleep_subcomponent, hrv_subcomponent) %>%
+  pivot_longer(cols = c(readiness_score_value, activity_subcomponent, sleep_subcomponent, hrv_subcomponent), 
+               names_to = "metric", values_to = "score") %>%
+  ggplot(aes(x = score, fill = metric)) +
+  geom_histogram(bins = 30, alpha = 0.6) +
+  facet_wrap(~metric, scales = "free") +
+  theme_bw() +
+  labs(title = "Distribution of Readiness and Subcomponent Scores")
+
+```
+
+1.  **Readiness Score (Red)**: The distribution shows a bimodal pattern, with peaks at the lower and higher ends of the score range, indicating that most scores are either quite low or quite high.
+
+2.  **Activity Subcomponent (Cyan)**: This histogram also exhibits a bimodal distribution, with significant groupings at lower and higher score values, suggesting periods of either low or high activity levels.
+
+3.  **HRV Subcomponent (Green)**: The distribution is more uniform but slightly skewed towards higher values, suggesting that most HRV scores are moderate to high.
+
+4.  **Sleep Subcomponent (Purple)**: Shows a heavily right-skewed distribution, indicating that high scores are much more prevalent, which could suggest generally good sleep quality among the subjects.
+
+Each histogram highlights different aspects of the data, revealing variations in how each subcomponent contributes to overall readiness scores.
+
+```{r}
+# Box plots of scores by readiness_state
+data %>%
+  select(readiness_score_value, activity_subcomponent, sleep_subcomponent, readiness_state) %>%
+  pivot_longer(cols = c(readiness_score_value, activity_subcomponent, sleep_subcomponent), 
+               names_to = "metric", values_to = "score", values_drop_na = TRUE) %>%
+  ggplot(aes(x = readiness_state, y = score, fill = readiness_state)) +
+  geom_boxplot() +
+  facet_wrap(~metric, scales = "free") +
+  theme_bw() +
+  labs(title = "Scores by Readiness State")
+
+```
+
+The box plot shows the distribution of scores for different readiness subcomponents across three readiness states: high, medium, and low.
+
+1.  **Activity Subcomponent**:
+    -   High readiness state has high activity scores, mostly around 75-100.
+    -   Medium readiness shows moderate activity scores.
+    -   Low readiness state is associated with the lowest activity scores, widely spread from 0 to around 50.
+2.  **Readiness Score Value**:
+    -   High readiness scores are tightly clustered at high values.
+    -   Medium and low readiness scores show a broader range, with low scores extending to very low values.
+3.  **Sleep Subcomponent**:
+    -   High readiness is correlated with high sleep scores.
+    -   Medium and low readiness states show lower sleep scores, with medium showing a wider range than high.
+
+This visualization clearly demonstrates that higher values in the activity and sleep subcomponents are associated with higher overall readiness states. Conversely, lower readiness states correlate with lower scores in these subcomponents.
+
+```{r}
+# Create a pairs plot for selected numeric variables
+pairs(select(data, readiness_score_value, activity_subcomponent, sleep_subcomponent, hrv_subcomponent)) 
+
+```
+
+The scatterplot matrix shows the relationships between readiness scores, activity, sleep, and HRV subcomponents:
+
+1.  **Readiness Score**: Strong positive correlations with both activity and sleep subcomponents, indicating higher scores are associated with increased activity and better sleep.
+2.  **Activity and Sleep**: No clear correlation, suggesting activity levels do not consistently predict sleep quality.
+3.  **HRV**: Shows weak or no clear correlations with other metrics, indicating it may be influenced by different factors not captured here.
+
+This visualization highlights the importance of activity and sleep in influencing overall readiness while showing that HRV behaves independently of these factors.
+
+```{r}
+library(tidymodels)
+
+set.seed(123)
+
+# Step 1: Identify Numerical Columns
+numerical_cols <- names(data)[sapply(data, is.numeric)]
+
+# Step 2: Subset the Data (Only Numerical Predictors)
+data_numeric <- data[, numerical_cols] 
+
+# Step 3: Create the Split
+split <- initial_split(data_numeric, prop = 0.8)
+
+# Step 4: Get Train and Test Sets
+train_data <- training(split)
+test_data <- testing(split)
+
+```
+
+# Modeling
+
+## Linear Regression
+
+```{r}
+# 1. Fit the Model (assuming your data is in a dataframe named 'data')
+lm_fit <- lm(readiness_score_value ~ activity_subcomponent + sleep_subcomponent + hrv_subcomponent, data = train_data)
+
+```
+
+```{r}
+# 2. Save Predictions
+lm_predictions <- predict(lm_fit, newdata = test_data)  # Predictions for all data points
+
+# 3. Basic Model Evaluation
+
+# a. R-squared (coefficient of determination)
+lm_rsquared <- summary(lm_fit)$r.squared
+print(paste0("R-squared: ", lm_rsquared))
+
+# b. Root Mean Squared Error (RMSE)
+# Assuming you have the actual 'readiness_score_value'
+lm_rmse <- sqrt(mean((lm_predictions - test_data$readiness_score_value)^2))
+print(paste0("RMSE: ", lm_rmse))
+
+plot(lm_fit)
+summary(lm_fit)
+
+```
+
+
+### Coefficients
+
+The coefficients represent the estimated effect of each predictor on the readiness score:
+
+- For every one unit increase in `activity_subcomponent`, the readiness score is expected to increase by approximately 0.96414 units.
+- For every one unit increase in `sleep_subcomponent`, the readiness score is expected to increase by approximately 0.36214 units.
+- The coefficient for `hrv_subcomponent` is not statistically significant at conventional levels (p-value > 0.05), suggesting that its effect on readiness score may not be reliable.
+
+### Model Performance
+
+- **R-squared**: 0.8751
+- **Adjusted R-squared**: 0.8724
+- **Residual standard error**: 10.92
+- **F-statistic**: 326.9 on 3 and 140 degrees of freedom
+- **p-value**: < 2.2e-16
+
+The high R-squared value indicates that a large proportion of the variability in readiness score is explained by the predictors.
+
+## Polynomial regression model
+
+```{r}
+# Fit a polynomial regression model
+poly_fit <- lm(readiness_score_value ~ poly(activity_subcomponent, 2) + 
+               sleep_subcomponent + hrv_subcomponent, data = train_data)
+
+```
+
+
+```{r}
+# Make predictions on the test set
+poly_predictions <- predict(poly_fit, newdata = test_data)
+
+# Calculate Root Mean Squared Error (RMSE)
+poly_rmse <- sqrt(mean((poly_predictions - test_data$readiness_score_value)^2))
+cat("Root Mean Squared Error on test set: ", poly_rmse, "\n")
+
+# R-squared (coefficient of determination)
+poly_rsquared <- summary(poly_fit)$r.squared
+print(paste0("R-squared: ", poly_rsquared))
+
+# Plot the polynomial fit
+plot(poly_fit)
+
+# Summary of the polynomial fit
+summary(poly_fit)
+
+```
+
+### Coefficients
+
+The coefficients represent the estimated effect of each predictor on the readiness score:
+
+- For every one unit increase in `activity_subcomponent`, the readiness score is expected to increase by approximately 334.84824 units when the relationship is linear (poly(activity_subcomponent, 2)1).
+- The quadratic term (poly(activity_subcomponent, 2)2) is not statistically significant at conventional levels (p-value > 0.05), suggesting that the relationship between `activity_subcomponent` and readiness score may not be well described by a quadratic function.
+- For every one unit increase in `sleep_subcomponent`, the readiness score is expected to increase by approximately 0.36239 units.
+- The coefficient for `hrv_subcomponent` is marginally statistically significant (p-value = 0.0725), suggesting a possible but weak effect on readiness score.
+
+### Model Performance
+
+- **R-squared**: 0.876
+- **Adjusted R-squared**: 0.8724
+- **Residual standard error**: 10.92
+- **F-statistic**: 245.4 on 4 and 139 degrees of freedom
+- **p-value**: < 2.2e-16
+
+The high R-squared value indicates that a large proportion of the variability in readiness score is explained by the predictors.
+
+## Decision Tree
+
+```{r}
+# Fit the decision tree model (using default parameters)
+dt_fit <- rpart(readiness_score_value ~ . , data = train_data, method = "anova")
+
+```
+
+```{r}
+
+# Predictions on the test set 
+dt_predictions <- predict(dt_fit, newdata = test_data)
+
+# Wrapper function
+predict_dt_wrapper <- function(object, newdata) {
+  predict(object, newdata = test_data, type="response")
+}
+
+# 1. Calculate Squared Errors
+squared_errors <- (dt_predictions - test_data$readiness_score_value)^2
+
+# 2. Calculate Mean Squared Error (MSE)
+dt_rmse <- mean(squared_errors)
+
+# Print the calculated RMSE
+print(paste0("Decision tree RMSE: ", round(dt_rmse, digits = 3)))
+
+# Visualize the tree
+rpart.plot(dt_fit)
+
+summary(dt_fit)
+
+```
+
+
+### Model Complexity Parameters
+
+The complexity parameter (CP) is used to control the size of the tree. As the tree grows larger, the CP decreases, indicating an increase in model complexity. The xerror column represents the cross-validated prediction error.
+
+| CP         | nsplit | rel error | xerror   | xstd      |
+|------------|--------|-----------|----------|-----------|
+| 0.64575099 | 0      | 1.000000  | 1.0193957| 0.10200414|
+| 0.08942784 | 1      | 0.354249  | 0.3687318| 0.06332577|
+| 0.05638847 | 3      | 0.175393  | 0.3260996| 0.08852764|
+| 0.01496090 | 4      | 0.119004  | 0.2168624| 0.07810262|
+| 0.01476045 | 5      | 0.104044  | 0.1934371| 0.07835836|
+| 0.01000000 | 6      | 0.089284  | 0.1886996| 0.07841701|
+
+### Variable Importance
+
+The importance of each predictor variable in the model is indicated by the percentage of times it is chosen for splitting nodes in the tree.
+
+| Variable               | Importance |
+|------------------------|------------|
+| activity_subcomponent  | 87%        |
+| sleep_subcomponent     | 11%        |
+| hrv_subcomponent       | 3%         |
+
+### Nodes
+
+The tree structure is represented by nodes, each containing a subset of observations. Each node is split into two child nodes based on a selected predictor variable and split point.
+
+- Node number 1: The root node with 144 observations.
+- Node number 2: Represents a subset of observations (36) with a mean readiness score of 20.92.
+- Node number 3: Represents a larger subset of observations (108) with a mean readiness score of 77.44.
+- Nodes 4 to 31: Further splits of the data based on predictor variables.
+
+### Mean Squared Error (MSE)
+
+The mean squared error (MSE) is used to evaluate the goodness of fit of the model within each node. It represents the average squared difference between predicted and actual readiness scores within a node.
+
+## Random Forest
+
+```{r}
+# Fit the Random Forest model
+rf_fit <- randomForest(readiness_score_value ~ ., data = train_data)
+
+# Predictions on the test set
+rf_predictions <- predict(rf_fit, newdata = test_data)
+
+# Calculate Mean Squared Error (MSE) for Random Forest
+rf_squared_errors <- (rf_predictions - test_data$readiness_score_value)^2
+rf_rmse <- mean(rf_squared_errors)
+print(paste0("Random Forest RMSE: ", round(rf_rmse, digits = 3)))
+
+```
+
+```{r}
+# 1. Print the model summary
+print(rf_fit)
+
+# 2. Show variable importance
+importance(rf_fit)
+
+# 3. Plot variable importance
+varImpPlot(rf_fit)
+
+# 4. Plot MSE or RMSE over the number of trees
+plot(rf_fit$mse, type = "l", xlab = "Number of Trees", ylab = "Mean Squared Error",
+     main = "MSE vs. Number of Trees in the Random Forest")
+
+```
+
+- **Type**: Regression random forest.
+- **Trees**: 500 trees used.
+- **Variables per Split**: 1 variable tried at each split.
+- **MSE**: Mean of squared residuals is 56.9829.
+- **Explained Variance**: 93.86% of the variance in the target variable is explained, indicating high accuracy.
+- **Variable Importance**:
+  - **activity_subcomponent** is the most influential.
+  - **sleep_subcomponent** and **hrv_subcomponent** also contribute significantly, though less than the activity component.
+  
+
+# Knn
+  
+```{r}
+# Model Fitting (Illustrative 'k')
+knn_fit <- train(readiness_score_value ~ . , data = train_data,
+                 method = "knn",
+                 trControl = trainControl(method = "none"), # No resampling yet
+                 tuneGrid = data.frame(k = 5)) # Experiment with different 'k' values
+
+# Predictions on the test set
+knn_predictions <- predict(knn_fit, newdata = test_data)
+
+# Calculate RMSE
+knn_rmse <- sqrt(mean((knn_predictions - test_data$readiness_score_value)^2))
+print(paste0("RMSE (KNN): ", knn_rmse))
+
+```
+
+```{r}
+# Print the KNN model summary
+print(summary(knn_fit))
+
+# Check the model's specific details, such as k value and other parameters
+print(paste0("Number of Neighbors (k): ", knn_fit$bestTune$k))
+
+```
+
+The KNN model with \( k = 5 \) neighbors resulted in an RMSE of 9.062, indicating the average prediction error. The model uses three predictors. The summary confirms that \( k = 5 \) was used, but does not provide detailed performance metrics or variable importance. This setup suggests the model performs reasonably well with the chosen parameters.
+
+
+# Model Selection
+
+```{r}
+# Assuming you have the following objects (adjust if needed):
+model_predictions <- list(lm_predictions, poly_predictions, dt_predictions, knn_predictions, rf_predictions)
+model_names <- c("Linear Model", "Polynomial  Model", "Decision Tree", "KNN", "Random Forest")
+model_rmses <- c(lm_rmse, poly_rmse, dt_rmse, knn_rmse, rf_rmse)  
+
+# 1. Create a Comparison Dataframe
+comparison_df <- data.frame(model = model_names, rmse = model_rmses)
+
+# 2. Arrange by RMSE (Ascending) 
+comparison_df <- comparison_df[order(comparison_df$rmse), ] 
+
+# 3. Print the Results
+print(comparison_df) 
+
+```
+
+Based on the RMSE (Root Mean Squared Error) values for each model:
+
+1. **K-Nearest Neighbors (KNN)**: 
+   - RMSE: 9.062348
+
+2. **Polynomial Model**:
+   - RMSE: 14.327693
+
+3. **Linear Model**:
+   - RMSE: 14.370072
+
+4. **Random Forest**:
+   - RMSE: 77.963570
+
+5. **Decision Tree**:
+   - RMSE: 102.829179
+
+Lower RMSE values indicate better model performance in terms of prediction accuracy. Based on the RMSE values:
+
+- **K-Nearest Neighbors (KNN)** has the lowest RMSE among all models, indicating it performs the best in terms of minimizing prediction errors on unseen data.
+  
+- The **Polynomial Model** and **Linear Model** have similar RMSE values, but the Polynomial Model slightly outperforms the Linear Model.
+
+- **Random Forest** and **Decision Tree** models have significantly higher RMSE values compared to the other models, indicating poorer performance in terms of prediction accuracy.
+
+Therefore, if the goal is to select the best-performing model based solely on RMSE, the K-Nearest Neighbors (KNN) model would be the preferred choice.
+
+# Results communication
+
+## Project Objective
+The focus of this project was to analyze factors influencing readiness scores by employing various statistical and machine learning models. The dataset included multiple metrics related to daily readiness assessments.
+
+## Encountered Challenges
+A significant challenge was the limited size of the dataset, containing just a small number of observations. Additionally, the data was too clean from the start, which sometimes can lead to models that are overly fit to a non-representative state of real-world data. This restriction was pivotal in shaping the outcomes of the modeling efforts, predominantly leading to overfitting across different applied models.
+
+## Model Implementation
+- **Linear and Polynomial Regression:** Aimed to identify both linear and nonlinear relationships within the data. However, the limited data led to polynomial models fitting excessively to noise.
+- **K-Nearest Neighbors (KNN):** Dependent on the choice of neighbors and distance metrics, KNN struggled with parameter tuning due to dataset size limitations.
+- **Random Forests and Decision Trees:** Known for handling complex dataset characteristics, both models nevertheless learned the data too precisely, mirroring training data patterns rather than learning to generalize.
+
+## Overfitting: A Recurring Issue
+The models exhibited excellent performance metrics that were unusually high for training datasets but were indicative of overfitting. This was characterized by the models' tendencies to memorize the training data instead of understanding underlying patterns.
+
+## Key Insights
+The analysis revealed that high accuracy on training data, while initially seeming positive, masked the models' poor generalization capabilities. This project underscores the need for a larger dataset or refined methodologies tailored for smaller datasets. Potential strategies include implementing data augmentation, opting for simpler models, and enhancing validation strategies to better assess model robustness.
+
+
+
+
+
