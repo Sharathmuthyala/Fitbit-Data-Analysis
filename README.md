@@ -64,13 +64,6 @@ This project models **overall sleep score** based on features like composition, 
 
 ---
 
-## 👥 Authors
-
-- [Jatin Adya](#)
-- [Sharath Reddy Muthyala](#)
-
----
-
 ## 📌 Notes
 
 - The datasets are derived from wearable fitness trackers and were anonymized for privacy.
